@@ -1,5 +1,6 @@
 <?php
 require_once "../config.php";
+include 'src/Template.php';
 
 use \Tsugi\Core\LTIX;
 use \Tsugi\Core\Settings;
@@ -21,39 +22,38 @@ if ( $LAUNCH->link && $LAUNCH->link->id && SettingsForm::handleSettingsPost() ) 
 $p = $CFG->dbprefix;
 
 $menu = false;
-if ( $LAUNCH->user->instructor ) {
-    $menu = new \Tsugi\UI\MenuSet();
-    if ( $CFG->launchactivity ) {
-        $menu->addRight(__('Analytics'), 'analytics');
-    }
-    $menu->addRight(__('Settings'), '#', /* push */ false, SettingsForm::attr());
-}
+// if ( $LAUNCH->user->instructor ) {
+//     $menu = new \Tsugi\UI\MenuSet();
+//     if ( $CFG->launchactivity ) {
+//         $menu->addRight(__('Analytics'), 'analytics');
+//     }
+//     $menu->addRight(__('Settings'), '#', /* push */ false, SettingsForm::attr());
+// }
 
+$context = [
+    'context_id' => $CONTEXT->id,
+    'context_key' => $CONTEXT->key,
+    'instructor' => $USER->instructor,
+    'name' => $USER->firstname
+];
+
+// echo '<pre>' . var_export($context, true) . '</pre>';
 
 // Render view
 $OUTPUT->header();
+Template::view('templates/header.html', $context);
+
 $OUTPUT->bodyStart();
 $OUTPUT->topNav($menu);
 $OUTPUT->flashMessages();
 
 $OUTPUT->welcomeUserCourse();
 
-if ( $LAUNCH->link && $LAUNCH->user && $LAUNCH->user->instructor ) {
-    SettingsForm::start();
-    SettingsForm::text('color','A color for breakout.');
-    SettingsForm::end();
-}
+Template::view('templates/body.html', $context);
 
-$color = Settings::linkGet('color', 'black');
-echo('<script> breakout_color = "'.$color.'";</script>');
-?>
-<canvas id="breakout" width="800" height="500" style="border:1px solid #000000;">
-</canvas>
-
-<?php
 $OUTPUT->footerStart();
-?>
-<script type="text/javascript" src="breakout.js" charset="utf-8"></script>
-<?php
+
+Template::view('templates/footer.html', $context);
 $OUTPUT->footerEnd();
+
 ?>

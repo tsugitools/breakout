@@ -1,0 +1,260 @@
+<script type="application/json" id="scoreboard-data">
+    {"game":"Breakout University","scores":[{"name":"Prof. Ada","score":1800,"level":4},{"name":"Dean Turing","score":1250,"level":3},{"name":"Fresher Fay","score":420,"level":1}]}
+</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        (function () {
+            const W = 24, H = 18, PY = 1.2, R = 0.28;
+            const $ = id => document.getElementById(id);
+            const renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 1.5));
+            document.body.prepend(renderer.domElement);
+            const scene = new THREE.Scene();
+            const cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 50); cam.position.set(W / 2, H / 2, 20);
+            scene.add(new THREE.AmbientLight(0xffffff, .85));
+            const pl = new THREE.PointLight(0xfff0c0, 1.1, 14); pl.position.set(W / 2, 3, 3); scene.add(pl);
+
+            // Fractal background (animated Julia set)
+            const bgMat = new THREE.ShaderMaterial({
+                uniforms: { uTime: { value: 0 }, uRes: { value: new THREE.Vector2(1, 1) }, uDim: { value: 1 } },
+                vertexShader: 'void main(){gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}',
+                fragmentShader: `precision highp float;uniform float uTime,uDim;uniform vec2 uRes;
+ void main(){
+  vec2 p=(gl_FragCoord.xy-.5*uRes)/uRes.y*2.8;
+  float a=uTime*.09+2.2;vec2 c=.7885*vec2(cos(a),sin(a));
+  vec2 z=p;float i=0.;
+  for(int k=0;k<64;k++){z=vec2(z.x*z.x-z.y*z.y,2.*z.x*z.y)+c;if(dot(z,z)>16.)break;i+=1.;}
+  float s=i-log2(log2(dot(z,z)))+4.;float v=i>=63.?0.:clamp(s/40.,0.,1.);
+  vec3 ink=vec3(.08,.07,.23),teal=vec3(.24,.78,.71),gold=vec3(.91,.72,.29);
+  vec3 col=mix(ink,teal,smoothstep(0.,.5,v));col=mix(col,gold,smoothstep(.5,1.,v));
+  gl_FragColor=vec4(col*uDim,1.);}`, depthWrite: false
+            });
+            const bg = new THREE.Mesh(new THREE.PlaneGeometry(300, 300), bgMat); bg.position.set(W / 2, H / 2, -10); scene.add(bg);
+
+            // Play field
+            const field = new THREE.Group(); field.visible = false; scene.add(field);
+            const back = new THREE.Mesh(new THREE.PlaneGeometry(W, H), new THREE.MeshBasicMaterial({ color: 0x14123a, transparent: true, opacity: .6 }));
+            back.position.set(W / 2, H / 2, -1); field.add(back);
+            const frame = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(W, H, .2)), new THREE.LineBasicMaterial({ color: 0xe8b84a }));
+            frame.position.set(W / 2, H / 2, 0); field.add(frame);
+            const paddle = new THREE.Mesh(new THREE.BoxGeometry(1, .5, .8), new THREE.MeshStandardMaterial({ color: 0xe8b84a, roughness: .4, metalness: .2 }));
+            paddle.position.y = PY; field.add(paddle);
+            const ballGeo = new THREE.SphereGeometry(R, 20, 14), ballMat = new THREE.MeshBasicMaterial({ color: 0xfff4d0 });
+            const partGeo = new THREE.BoxGeometry(.16, .16, .16);
+
+            // State
+            let state = 'menu', score = 0, lives = 3, level = 1, name = 'Student';
+            let balls = [], bricks = [], drops = [], parts = [];
+            let fx = { review: 0, scholarship: 0, deadline: 0 };
+            let px = W / 2, targetX = W / 2, pw = 3.4, keyDir = 0, dimTarget = 1, toastT = 0;
+            const BASE = 10;
+            const COLS = 10, ROWS = 6, BW = 2.1, BH = .8, GAP = .15;
+            const rowColors = [0xe8b84a, 0xe8b84a, 0x3cc6b5, 0x5aa0e6, 0xc77dd6, 0xef7a85];
+
+            function buildBricks() {
+                bricks.forEach(b => field.remove(b.m)); bricks = [];
+                const x0 = (W - (COLS * (BW + GAP) - GAP)) / 2 + BW / 2;
+                for (let r = 0; r < ROWS; r++)for (let c = 0; c < COLS; c++) {
+                    const col = rowColors[r];
+                    const m = new THREE.Mesh(new THREE.BoxGeometry(BW, BH, .6), new THREE.MeshStandardMaterial({ color: col, emissive: col, emissiveIntensity: .2, roughness: .5 }));
+                    m.position.set(x0 + c * (BW + GAP), H - 2 - r * (BH + GAP), 0); field.add(m);
+                    bricks.push({ m, x: m.position.x, y: m.position.y, hp: r < 2 ? 2 : 1, pts: (ROWS - r) * 10, alive: true });
+                }
+            }
+            function newBall(stuck) { const m = new THREE.Mesh(ballGeo, ballMat); field.add(m); const b = { m, x: px, y: PY + .25 + R, vx: 0, vy: 0, stuck: !!stuck }; m.position.set(b.x, b.y, 0); balls.push(b); return b; }
+            function speed() { return BASE * (1 + .08 * (level - 1)) * (fx.review > 0 ? .6 : 1) * (fx.deadline > 0 ? 1.4 : 1); }
+            function clearBalls() { balls.forEach(b => field.remove(b.m)); balls = []; }
+            function clearDrops() { drops.forEach(d => field.remove(d.m)); drops = []; }
+            function toast(t, ms) { const e = $('toast'); e.textContent = t; e.style.display = 'block'; toastT = ms || 0; }
+            function hideToast() { $('toast').style.display = 'none'; }
+
+            function startGame() {
+                if (document.activeElement) document.activeElement.blur();
+                name = ('{{$name}}' || 'Student').slice(0, 16);
+                score = 0; lives = 3; level = 1; fx = { review: 0, scholarship: 0, deadline: 0 };
+                clearBalls(); clearDrops(); buildBricks(); newBall(true);
+                field.visible = true; dimTarget = .35; state = 'ready';
+                $('start').classList.add('hidden'); $('over').classList.add('hidden'); $('hud').style.display = 'flex'; resize();
+                toast('Click, tap, or press Space to launch', 0);
+            }
+            function launch() {
+                if (state !== 'ready') return; state = 'play'; hideToast();
+                balls.forEach(b => { if (b.stuck) { b.stuck = false; const a = (Math.random() - .5) * .6, s = speed(); b.vx = Math.sin(a) * s; b.vy = Math.cos(a) * s; } });
+            }
+
+            // Power-ups
+            const TYPES = [
+                { id: 'tutorial', label: 'Tutorial', color: '#3cc6b5', w: .35, msg: 'Tutorial: extra ball' },
+                { id: 'review', label: 'Review', color: '#5aa0e6', w: .25, msg: 'Review: balls slow down' },
+                { id: 'scholarship', label: 'Scholarship', color: '#e8b84a', w: .25, msg: 'Scholarship: wider paddle' },
+                { id: 'deadline', label: 'Deadline', color: '#ef6a6a', w: .15, msg: 'Deadline! Balls speed up' }];
+            const texCache = {};
+            function labelTex(t) {
+                if (texCache[t.id]) return texCache[t.id];
+                const c = document.createElement('canvas'); c.width = 256; c.height = 80; const g = c.getContext('2d');
+                g.fillStyle = t.color; g.fillRect(0, 0, 256, 80); g.strokeStyle = '#14123a'; g.lineWidth = 8; g.strokeRect(0, 0, 256, 80);
+                g.fillStyle = '#14123a'; g.font = 'bold 34px Lato,sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(t.label, 128, 42);
+                return texCache[t.id] = new THREE.CanvasTexture(c);
+            }
+            function spawnDrop(x, y) {
+                let r = Math.random(), t = TYPES[0]; for (const k of TYPES) { if (r < k.w) { t = k; break; } r -= k.w; }
+                const m = new THREE.Mesh(new THREE.PlaneGeometry(2.2, .7), new THREE.MeshBasicMaterial({ map: labelTex(t) }));
+                m.position.set(x, y, .5); field.add(m); drops.push({ m, t, x, y });
+            }
+            function applyPower(t) {
+                toast(t.msg, 1600);
+                if (t.id === 'tutorial') {
+                    const src = balls.find(b => !b.stuck);
+                    if (src && balls.length < 8) { const b = newBall(false); b.x = src.x; b.y = src.y; const s = speed(), a = Math.atan2(src.vx, src.vy) + .5; b.vx = Math.sin(a) * s; b.vy = Math.abs(Math.cos(a)) * s; }
+                } else if (t.id === 'review') fx.review = 10;
+                else if (t.id === 'scholarship') fx.scholarship = 12;
+                else fx.deadline = 8;
+            }
+
+            function burst(x, y, color) {
+                for (let i = 0; i < 8; i++) {
+                    const m = new THREE.Mesh(partGeo, new THREE.MeshBasicMaterial({ color, transparent: true }));
+                    m.position.set(x, y, .5); field.add(m);
+                    const a = Math.random() * 6.28, s = 2 + Math.random() * 4; parts.push({ m, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: .6 });
+                }
+            }
+            function hitBrick(br) {
+                br.hp--; score += 5;
+                if (br.hp <= 0) {
+                    br.alive = false; field.remove(br.m); score += br.pts; burst(br.x, br.y, br.m.material.color.getHex());
+                    if (Math.random() < .25) spawnDrop(br.x, br.y);
+                    if (bricks.every(b => !b.alive)) nextLevel();
+                } else { br.m.material.color.set(0xfff0b0); br.m.material.emissive.set(0xfff0b0); }
+            }
+            function nextLevel() {
+                level++; toast('Level ' + level + ': new term begins', 1800);
+                clearDrops(); clearBalls(); buildBricks(); newBall(true); state = 'ready';
+            }
+
+            function moveBalls(dt) {
+                const s = speed();
+                for (let i = balls.length - 1; i >= 0; i--) {
+                    const b = balls[i];
+                    if (b.stuck) { b.x = px; b.y = PY + .25 + R; continue; }
+                    const l = Math.hypot(b.vx, b.vy) || 1; b.vx *= s / l; b.vy *= s / l;
+                    b.x += b.vx * dt; b.y += b.vy * dt;
+                    if (b.x < R) { b.x = R; b.vx = Math.abs(b.vx); }
+                    if (b.x > W - R) { b.x = W - R; b.vx = -Math.abs(b.vx); }
+                    if (b.y > H - R) { b.y = H - R; b.vy = -Math.abs(b.vy); }
+                    if (b.y < -1) { field.remove(b.m); balls.splice(i, 1); continue; }
+                    if (b.vy < 0 && b.y - R <= PY + .25 && b.y > PY - .1 && Math.abs(b.x - px) <= pw / 2 + R) {
+                        b.y = PY + .25 + R; const a = Math.max(-1, Math.min(1, (b.x - px) / (pw / 2))) * 1.05;
+                        b.vx = Math.sin(a) * s; b.vy = Math.cos(a) * s;
+                    }
+                    for (const br of bricks) {
+                        if (!br.alive) continue;
+                        const cx = Math.max(br.x - BW / 2, Math.min(b.x, br.x + BW / 2)), cy = Math.max(br.y - BH / 2, Math.min(b.y, br.y + BH / 2));
+                        const dx = b.x - cx, dy = b.y - cy;
+                        if (dx * dx + dy * dy < R * R) {
+                            if (Math.abs(dx) > Math.abs(dy)) b.vx = (dx < 0 ? -1 : 1) * Math.abs(b.vx);
+                            else b.vy = (dy < 0 ? -1 : 1) * Math.abs(b.vy || 1);
+                            hitBrick(br); break;
+                        }
+                    }
+                }
+            }
+
+            function update(dt) {
+                if (keyDir) targetX += keyDir * 24 * dt;
+                targetX = Math.max(0, Math.min(W, targetX));
+                const goal = 3.4 * (fx.scholarship > 0 ? 1.6 : 1); pw += (goal - pw) * Math.min(1, dt * 10);
+                px += (targetX - px) * Math.min(1, dt * 18); px = Math.max(pw / 2, Math.min(W - pw / 2, px));
+                paddle.position.x = px; paddle.scale.x = pw;
+                if (state === 'play' || state === 'ready') {
+                    for (const k in fx) if (fx[k] > 0) fx[k] = Math.max(0, fx[k] - dt);
+                    if (state === 'play') { moveBalls(dt / 2); moveBalls(dt / 2); } else moveBalls(dt);
+                    for (let i = drops.length - 1; i >= 0; i--) {
+                        const d = drops[i]; d.y -= 4.5 * dt; d.m.position.y = d.y;
+                        if (d.y < PY + .5 && d.y > PY - .5 && Math.abs(d.x - px) < pw / 2 + 1.1) { applyPower(d.t); field.remove(d.m); drops.splice(i, 1); }
+                        else if (d.y < -1) { field.remove(d.m); drops.splice(i, 1); }
+                    }
+                    if (state === 'play' && balls.length === 0) {
+                        lives--; fx = { review: 0, scholarship: 0, deadline: 0 }; clearDrops();
+                        if (lives <= 0) gameOver(); else { newBall(true); state = 'ready'; toast('Life lost. Launch when ready', 0); }
+                    }
+                }
+                for (let i = parts.length - 1; i >= 0; i--) {
+                    const p = parts[i]; p.life -= dt; p.m.position.x += p.vx * dt; p.m.position.y += p.vy * dt; p.m.scale.setScalar(Math.max(.01, p.life / .6));
+                    if (p.life <= 0) { field.remove(p.m); parts.splice(i, 1); }
+                }
+                if (balls[0]) pl.position.set(balls[0].x, balls[0].y, 3);
+                balls.forEach(b => b.m.position.set(b.x, b.y, 0));
+                if (toastT > 0) { toastT -= dt * 1000; if (toastT <= 0) hideToast(); }
+            }
+
+            function hud() {
+                $('hScore').textContent = score; $('hLevel').textContent = level; $('hLives').textContent = lives;
+                const f = $('fx'); f.innerHTML = '';
+                for (const k in fx) if (fx[k] > 0) { const s = document.createElement('span'); s.textContent = k[0].toUpperCase() + k.slice(1) + ' ' + Math.ceil(fx[k]) + 's'; if (k === 'deadline') s.style.background = '#ef6a6a'; f.appendChild(s); }
+            }
+
+            // Scoreboard (JSON object embedded in the page)
+            let board;
+            try { board = JSON.parse($('scoreboard-data').textContent); } catch (e) { board = { game: 'Breakout University', scores: [] }; }
+            try { const saved = JSON.parse(localStorage.getItem('bu-scoreboard') || 'null'); if (saved && Array.isArray(saved.scores)) board = saved; } catch (e) { }
+            function gameOver() {
+                state = 'over'; dimTarget = .8; hideToast(); $('hud').style.display = 'none';
+                const entry = { name, score, level };
+                board.scores.push(entry); board.scores.sort((a, b) => b.score - a.score); board.scores = board.scores.slice(0, 10);
+                try { localStorage.setItem('bu-scoreboard', JSON.stringify(board)); } catch (e) { }
+                $('scoreboard-data').textContent = JSON.stringify(board);
+                $('summary').textContent = name + ', you scored ' + score + ' and reached level ' + level + '.';
+                // const tb = $('rows'); tb.innerHTML = '';
+                // board.scores.forEach((s, i) => {
+                //     const tr = document.createElement('tr'); if (s === entry) tr.className = 'me';
+                //     [i + 1, s.name, s.score, s.level].forEach(v => { const td = document.createElement('td'); td.textContent = v; tr.appendChild(td); });
+                //     tb.appendChild(tr);
+                // });
+                // $('json').textContent = JSON.stringify(board, null, 2);
+                $('over').classList.remove('hidden');
+            }
+
+            function cancelGame() {
+                if (state === 'menu') return;
+                state = 'menu'; keyDir = 0; hideToast(); clearBalls(); clearDrops();
+                parts.forEach(p => field.remove(p.m)); parts = [];
+                field.visible = false; dimTarget = 1;
+                $('hud').style.display = 'none'; $('over').classList.add('hidden'); $('start').classList.remove('hidden');
+                resize();
+            }
+            // Input
+            function setX(cx) { const l = cam.left, r = cam.right; targetX = W / 2 + l + (cx / innerWidth) * (r - l); }
+            addEventListener('pointermove', e => { if (state === 'play' || state === 'ready') setX(e.clientX); });
+            renderer.domElement.addEventListener('pointerdown', e => { if (state === 'ready') { setX(e.clientX); launch(); } });
+            addEventListener('keydown', e => {
+                if (e.key === 'Escape') { cancelGame(); return; }
+                if (e.key === 'ArrowLeft') keyDir = -1; else if (e.key === 'ArrowRight') keyDir = 1;
+                else if (e.key === ' ' && state === 'ready') { e.preventDefault(); launch(); }
+            });
+            addEventListener('keyup', e => { if ((e.key === 'ArrowLeft' && keyDir < 0) || (e.key === 'ArrowRight' && keyDir > 0)) keyDir = 0; });
+            $('play').addEventListener('click', startGame);
+            $('again').addEventListener('click', startGame);
+            $('quit').addEventListener('click', cancelGame);
+
+            function resize() {
+                renderer.setSize(innerWidth, innerHeight);
+                const hudEl = $('hud'), top = hudEl.style.display === 'flex' ? hudEl.getBoundingClientRect().bottom + 4 : 12, bot = 20, side = 10;
+                const sc = Math.max(1, Math.min((innerWidth - 2 * side) / W, (innerHeight - top - bot) / H));
+                const hw = innerWidth / 2 / sc, hh = innerHeight / 2 / sc;
+                cam.position.y = H / 2 + ((top - bot) / 2) / sc;
+                cam.left = -hw; cam.right = hw; cam.top = hh; cam.bottom = -hh; cam.updateProjectionMatrix();
+                const v = new THREE.Vector2(); renderer.getDrawingBufferSize(v); bgMat.uniforms.uRes.value.copy(v);
+            }
+            addEventListener('resize', resize); resize();
+            if (document.fonts) document.fonts.ready.then(resize);
+
+            const clock = new THREE.Clock();
+            renderer.setAnimationLoop(() => {
+                const dt = Math.min(clock.getDelta(), 1 / 30);
+                bgMat.uniforms.uTime.value += dt;
+                bgMat.uniforms.uDim.value += (dimTarget - bgMat.uniforms.uDim.value) * Math.min(1, dt * 3);
+                if (state !== 'menu') { update(dt); hud(); }
+                renderer.render(scene, cam);
+            });
+        })();
+    </script>

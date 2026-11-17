@@ -1,0 +1,47 @@
+    <div id="hud">
+        <div id="stats">
+            <div>Score<b id="hScore">0</b></div>
+            <div>Level<b id="hLevel">1</b></div>
+            <div>Lives<b id="hLives">3</b></div><button id="quit" type="button"
+                aria-label="Quit game (Esc)">Quit</button>
+        </div>
+        <div id="status">
+            <div id="toast"></div>
+            <div id="fx"></div>
+        </div>
+    </div>
+
+    <div class="overlay" id="start">
+        <div class="win">
+            <div class="bar"><i>!</i> It's Orientation Week <i>!</i></div>
+            <div class="body">
+                <!-- <h1>Breakout University</h1> -->
+                <h2>Welcome, <b id="who">{{$name}}</b></h2>
+                <p>Clear every brick from the degree wall before your semester runs out.</p>
+                <ul>
+                    <li>Move the paddle with the mouse, your finger, or the arrow keys.</li>
+                    <li>Click, tap, or press Space to launch the ball. You have three lives.</li>
+                    <li>Press Esc, or tap Quit, to cancel the game.</li>
+                    <li>PhD bricks (gold) take two hits. Catch falling cards for power-ups:</li>
+                    <li><b>Tutorial</b>: an extra ball</li>
+                    <li><b>Review</b>: slows the balls down</li>
+                    <li><b>Scholarship</b>: a wider paddle</li>
+                    <li><b>Deadline</b>: speeds the balls up. Dodge it.</li>
+                </ul>
+                <button id="play">Play</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="overlay hidden" id="over">
+        <div class="win">
+            <div class="bar">Results Office</div>
+            <div class="body">
+                <h2>Semester over</h2>
+                <h4 id="summary"></h4>
+                <div style="text-align:center">
+                    <button id="again">Play again</button>
+                </div>
+            </div>
+        </div>
+    </div>
